@@ -424,7 +424,7 @@ int tcmu_emulate_evpd_inquiry(
 	switch (cdb[2]) {
 	case 0x0: /* Supported VPD pages */
 	{
-		char data[7];
+		char data[8];
 
 		memset(data, 0, sizeof(data));
 
@@ -432,8 +432,9 @@ int tcmu_emulate_evpd_inquiry(
 
 		data[5] = 0x83;
 		data[6] = 0xb0;
+		data[7] = 0xb2;
 
-		data[3] = 3;
+		data[3] = 4;
 
 		tcmu_memcpy_into_iovec(iovec, iov_cnt, data, sizeof(data));
 
@@ -575,6 +576,45 @@ int tcmu_emulate_evpd_inquiry(
 		return SAM_STAT_GOOD;
 	}
 	break;
+        case 0xb2: 
+        {
+          /* 
+           * logical block provsion VPD page
+           */
+          char data[64];
+          long long size;
+          unsigned long long num_lbas;
+          int block_size;
+          uint16_t bits = 0;
+          uint16_t *page_length = (uint16_t *)&data[2];
+
+          memset(data, 0, sizeof(data));
+          data[1] = 0xb2;
+          /*
+           *  set LBPU LBPWS LBRWS10 bits to 1
+           * set DP bit to 0
+           */	 
+          data[5] = 0xe0;
+          *page_length = 4;
+          // provisioning type is thin provisioned
+          data[6] = 0x02;
+          // set THRESHOLD EXPONENT
+          size = tcmu_get_device_size(dev);
+          block_size = tcmu_get_attribute(dev, "hw_block_size");
+          if (block_size == -1) {
+            return tcmu_set_sense_data(sense, ILLEGAL_REQUEST,
+                                       ASC_INVALID_FIELD_IN_CDB, NULL);
+          }
+          num_lbas = size / block_size;
+          while (num_lbas > 0) {
+            bits++;
+            num_lbas /= 2;
+          }
+          data[4] = bits - 31;
+
+          return SAM_STAT_GOOD;
+        }
+        break;
 	default:
 		return tcmu_set_sense_data(sense, ILLEGAL_REQUEST,
 					   ASC_INVALID_FIELD_IN_CDB, NULL);
