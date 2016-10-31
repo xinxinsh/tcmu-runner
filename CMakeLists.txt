@@ -9,6 +9,7 @@ set(tcmu-runner_HANDLER_PATH "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/tc
 
 option(with-glfs "build Gluster glfs handler" true)
 option(with-qcow "build qcow handler" true)
+option(with-rbd "build rbd handler" true)
 
 find_library(LIBNL_LIB nl-3)
 find_library(LIBNL_GENL_LIB nl-genl-3)
@@ -179,6 +180,26 @@ if (with-qcow)
 	  )
 	install(TARGETS handler_qcow DESTINATION ${CMAKE_INSTALL_LIBDIR}/tcmu-runner)
 endif (with-qcow)
+
+if (with-rbd)
+        find_library(RBD rbd)
+        find_library(RADOS rados)
+
+        # Stuff for building the rbd handler
+        add_library(handler_rbd
+          SHARED
+          rbd.c
+          )
+        set_target_properties(handler_rbd
+          PROPERTIES
+          PREFIX ""
+          )
+        target_link_libraries(handler_rbd
+          ${RBD}
+          ${RADOS}
+          )
+        install(TARGETS handler_rbd DESTINATION ${CMAKE_INSTALL_LIBDIR}/tcmu-runner)
+endif (with-rbd)
 
 # stamp out a header file to pass some of the CMake settings
 # to the source code

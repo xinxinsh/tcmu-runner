@@ -10,6 +10,7 @@
 /*
  * SCSI Opcodes
  */
+#define VERIFY                          0x2f
 #define UNMAP				0x42
 #define READ_16				0x88
 #define MODE_SELECT_10			0x55
@@ -17,9 +18,11 @@
 #define	COMPARE_AND_WRITE		0x89
 #define WRITE_16			0x8a
 #define WRITE_VERIFY_16			0x8e
+#define VERIFY_16	                0x8f
 #define SYNCHRONIZE_CACHE_16		0x91
 #define WRITE_SAME_16			0x93
 #define SERVICE_ACTION_IN_16		0x9e
+#define VERIFY_12	                0xaf
 
 /*
  * Service action opcodes
@@ -51,3 +54,4 @@
 #define ASC_MISCOMPARE_DURING_VERIFY_OPERATION 0x1d00
 #define ASC_INVALID_FIELD_IN_CDB	0x2400
 #define ASC_INVALID_FIELD_IN_PARAMETER_LIST 0x2600
+#define ASC_LBA_OUT_OF_RANGE            0x2100

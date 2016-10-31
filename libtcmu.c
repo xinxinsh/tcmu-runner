@@ -289,7 +289,14 @@ static int add_device(struct tcmulib_context *ctx,
 	dev->ctx = ctx;
 
 	darray_append(ctx->devices, dev);
-
+        
+        struct tcmu_device **dptr;
+        struct tcmu_device *ddev;
+        darray_foreach(dptr, ctx->devices) {
+          ddev = * dptr;
+          printf("device %s with fd %d\n",ddev->dev_name, ddev->fd);
+        }
+       
 	ret = dev->handler->added(dev);
 	if (ret < 0) {
 		tcmu_errp(ctx, "handler open failed for %s\n", dev->dev_name);
@@ -344,8 +351,6 @@ static void remove_device(struct tcmulib_context *ctx,
 		return;
 	}
 
-	dev->handler->removed(dev);
-
 	darray_remove(ctx->devices, i);
 
 	ret = close(dev->fd);
@@ -356,6 +361,8 @@ static void remove_device(struct tcmulib_context *ctx,
 	if (ret != 0) {
 		tcmu_errp(ctx, "could not unmap device %s: %d\n", dev_name, errno);
 	}
+
+	dev->handler->removed(dev);
 }
 
 static int is_uio(const struct dirent *dirent)
