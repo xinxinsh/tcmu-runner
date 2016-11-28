@@ -37,6 +37,7 @@
 #include <getopt.h>
 #include <poll.h>
 
+#include <sys/time.h>
 #include <libkmod.h>
 #include <linux/target_core_user.h>
 #include "darray.h"
@@ -70,6 +71,14 @@ void dbgp(const char *fmt, ...)
 		vprintf(fmt, va);
 		va_end(va);
 	}
+}
+
+uint64_t get_time()
+{
+  struct timeval tm;
+  gettimeofday(&tm, NULL);
+  uint64_t time = 100000 * tm.tv_sec + tm.tv_usec;
+  return time;
 }
 
 void errp(const char *fmt, ...)
@@ -196,6 +205,7 @@ static void *thread_start(void *arg)
 		tcmulib_processing_start(dev);
 
 		while ((cmd = tcmulib_get_next_command(dev)) != NULL) {
+                        uint64_t start = get_time();
 			int i;
 			bool short_cdb = cmd->cdb[0] <= 0x1f;
 
@@ -209,6 +219,8 @@ static void *thread_start(void *arg)
 				tcmulib_command_complete(dev, cmd, ret);
 				completed = 1;
 			}
+                       uint64_t dur = get_time() - start;
+                       dbgp("durinng time %x %u\n", cmd->cdb[0], dur);
 		}
 
 		if (completed)
