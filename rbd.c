@@ -26,8 +26,27 @@
 #include <sys/stat.h>
 #include <rbd/librbd.h>
 #include <rados/librados.h>
+#include <pthread.h>
+#include <signal.h>
 
+#include "libtcmu.h"
 #include "tcmu-runner.h"
+
+#define NHANDLERS 32
+#define NCMDS 8
+
+struct rbd_handler {
+  struct tcmu_device* dev;
+  int num;
+  
+  pthread_mutex_t mtx;
+  pthread_cond_t cond;
+  
+  pthread_t pht;
+  int cmd_head;
+  int cmd_tail;
+  struct tcmulib_cmd* cmds[NCMDS];
+};
 
 struct rbd_state{
   char *pool;
@@ -38,8 +57,74 @@ struct rbd_state{
   rbd_image_t rbd_image;
   
   unsigned int block_size;
+  pthread_mutex_t completion;
+  int cur_handler;
+  struct rbd_handler handlers[NHANDLERS];
 };
 
+static int rbd_handle_cmd(struct tcmu_device* dev, struct tcmulib_cmd* cmd);
+
+static void* rbd_handler_run(void* arg)
+{
+  struct rbd_handler* h = (struct rbd_handler*) arg;
+  struct rbd_state* state = tcmu_get_dev_private(h->dev);
+
+  dbgp("start thread %d ", h->num);
+  
+  while(1) {
+    int result;
+    struct tcmulib_cmd* cmd;
+
+    pthread_mutex_lock(&h->mtx);
+    while (h->cmd_tail == h->cmd_head)
+      pthread_cond_wait(&h->cond, &h->mtx);
+
+    cmd = h->cmds[h->cmd_tail];
+    pthread_mutex_unlock(&h->mtx);
+
+    result = rbd_handle_cmd(h->dev, cmd);
+    dbgp("rbd_handle_cmd %dth ret %d\n", h->cmd_tail, result);
+
+    pthread_mutex_lock(&state->completion);
+    tcmulib_command_complete(h->dev, cmd, result);
+    tcmulib_processing_complete(h->dev);
+    pthread_mutex_unlock(&state->completion);
+
+    pthread_mutex_lock(&h->mtx);
+    h->cmds[h->cmd_tail] = NULL;
+    h->cmd_tail = (h->cmd_tail + 1) % NCMDS;
+    pthread_cond_signal(&h->cond);
+    pthread_mutex_unlock(&h->mtx);
+  }
+
+  return NULL;
+}
+
+static void rbd_handler_init(struct rbd_handler* h, struct tcmu_device* dev, int i)
+{
+  h->dev = dev;
+  h->num = i;
+ 
+  pthread_mutex_init(&h->mtx, NULL);
+  pthread_cond_init(&h->cond, NULL);
+  
+  pthread_create(&h->pht, NULL, rbd_handler_run, h);
+  h->cmd_head = 0;
+  h->cmd_tail = 0;
+  for(int i = 0; i < NCMDS; i++)
+    h->cmds[i] = NULL;
+}
+
+static void rbd_handler_destroy(struct rbd_handler* h)
+{
+  if(h->pht) {
+    pthread_kill(h->pht, SIGINT);
+    pthread_join(h->pht, NULL);
+  }
+  
+  pthread_cond_destroy(&h->cond);
+  pthread_mutex_destroy(&h->mtx);
+}
 
 /*
  * parse rbd image name 
@@ -318,7 +403,9 @@ static int tcmu_rbd_open(struct tcmu_device *device)
     goto failed;
   }
   
-//  rbd_st->block_size = info.obj_size;
+  pthread_mutex_init(&rbd_st->completion, NULL);
+  for(int i = 0; i < NHANDLERS; i++)
+    rbd_handler_init(&rbd_st->handlers[i], device, i);
 
   return 0;
 failed:
@@ -349,6 +436,12 @@ failed:
 static void tcmu_rbd_close(struct tcmu_device *device)
 {
   struct rbd_state *rbd_st = tcmu_get_dev_private(device);
+
+  for(int i = 0; i < NHANDLERS; i++) {
+    rbd_handler_destroy(&rbd_st->handlers[i]);
+  }
+  pthread_mutex_destroy(&rbd_st->completion);
+
   if (rbd_st) {
     rbd_close(rbd_st->rbd_image);
     rados_ioctx_destroy(rbd_st->ioctx);
@@ -367,7 +460,7 @@ static int set_medium_error(uint8_t *sense)
  * @device: device to be processed
  * @cmd: command issued to device
 */
-static int tcmu_rbd_handle_cmd(struct tcmu_device *device, struct tcmulib_cmd *tcmulib_cmd)
+static int rbd_handle_cmd(struct tcmu_device *device, struct tcmulib_cmd *tcmulib_cmd)
 {
   uint64_t off, *off1;
   uint32_t len, *len1;
@@ -671,6 +764,26 @@ verify:
 
   return result;
 }
+
+static int tcmu_rbd_handle_cmd_async(struct tcmu_device* dev, struct tcmulib_cmd* cmd)
+{
+  struct rbd_state* state = tcmu_get_dev_private(dev);
+  struct rbd_handler* h = &state->handlers[state->cur_handler];
+  
+  state->cur_handler = (state->cur_handler + 1) % NHANDLERS;
+
+  pthread_mutex_lock(&h->mtx);
+  while((h->cmd_head + 1) % NCMDS == h->cmd_tail)
+    pthread_cond_wait(&h->cond, &h->mtx);
+
+  h->cmds[h->cmd_head] = cmd;
+  h->cmd_head = (h->cmd_head + 1) % NCMDS;
+  pthread_cond_signal(&h->cond);
+  pthread_mutex_unlock(&h->mtx);
+
+  return TCMU_ASYNC_HANDLED;
+}
+
 static const char rbd_cfg_desc[] = 
   "rbd config string if of the form:\n"
   "\"pool/name@snap\"\n"
@@ -688,7 +801,7 @@ struct tcmur_handler rbd_handler = {
 
     .open = tcmu_rbd_open,
     .close = tcmu_rbd_close,
-    .handle_cmd = tcmu_rbd_handle_cmd,
+    .handle_cmd = tcmu_rbd_handle_cmd_async,
 };
 
 // Entry point must be named "handler_init"
